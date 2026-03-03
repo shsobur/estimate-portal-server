@@ -60,10 +60,35 @@ const adminRoutes = (clientsCollection) => {
     }
   });
 
-  // ====== GET /all-clients ======
-  router.get("/all-clients", async (req, res) => {
+  // ====== GET /clients ======
+  // Supports: search by name/email + sort by status (or createdAt)__
+  router.get("/clients", async (req, res) => {
     try {
-      const result = await clientsCollection.find().toArray();
+      const { search, sort = "status", order = "asc" } = req.query;
+
+      // Build query for search__
+      let query = {};
+      if (search?.trim()) {
+        const searchRegex = new RegExp(search.trim(), "i");
+        query.$or = [{ clientName: searchRegex }, { email: searchRegex }];
+      }
+
+      // Whitelist safe sort fields (prevent injection)__
+      const allowedSortFields = ["status", "createdAt", "clientName"];
+      const sortField = allowedSortFields.includes(sort) ? sort : "status";
+      const sortOrder = order === "desc" ? -1 : 1;
+
+      // Sort by chosen field + createdAt as tie-breaker (newest first)__
+      const sortOption = {
+        [sortField]: sortOrder,
+        createdAt: -1,
+      };
+
+      const result = await clientsCollection
+        .find(query)
+        .sort(sortOption)
+        .toArray();
+
       res.send(result);
     } catch (error) {
       console.error(error);
