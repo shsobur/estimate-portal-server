@@ -39,9 +39,10 @@ async function run() {
   try {
     const db = client.db("Toiral-Estimate");
     const clientsCollection = db.collection("clients");
+    const projectsCollection = db.collection("projects");
 
     // Mount admin routes__
-    app.use("/admin-api", adminRoutes(clientsCollection));
+    app.use("/admin-api", adminRoutes(clientsCollection, projectsCollection));
 
     // Confirm connection__
     await client.db("admin").command({ ping: 1 });

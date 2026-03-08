@@ -14,7 +14,7 @@ const generateCode = () => {
 };
 
 // ====== Admin Routes Factory ======
-const adminRoutes = (clientsCollection) => {
+const adminRoutes = (clientsCollection, projectsCollection) => {
   // ====== POST /add-client ======
   router.post("/add-client", async (req, res) => {
     try {
@@ -114,6 +114,99 @@ const adminRoutes = (clientsCollection) => {
       res.json({ message: "Client updated successfully", result });
     } catch (error) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  router.post("/client-by-code", async (req, res) => {
+    try {
+      const { clientCode } = req.body;
+      console.log(req.body);
+
+      if (!clientCode) {
+        return res.status(400).json({ message: "clientCode is required" });
+      }
+
+      const result = await clientsCollection.findOne(
+        { clientCode },
+        {
+          projection: {
+            _id: 1,
+            clientName: 1,
+            companyName: 1,
+            projectName: 1,
+            phone: 1,
+            email: 1,
+            status: 1,
+            clientCode: 1,
+            assignedTeam: 1,
+          },
+        },
+      );
+
+      if (!result) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  router.post("/add-project", async (req, res) => {
+    try {
+      const projectData = req.body;
+      console.log(projectData);
+
+      if (!projectData) {
+        return res.status(400).json({ message: "Project data is required" });
+      }
+
+      const result = await projectsCollection.insertOne({
+        ...projectData,
+        createdAt: new Date(),
+      });
+
+      res.status(201).json({
+        message: "Project added successfully",
+        insertedId: result.insertedId,
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ====== GET /projects-summary ======
+  router.get("/projects-summary", async (req, res) => {
+    try {
+      const clientCollName = clientsCollection.collectionName || "clients";
+
+      const aggregation = [
+        {
+          $lookup: {
+            from: clientCollName,
+            localField: "clientCode",
+            foreignField: "clientCode",
+            as: "client",
+          },
+        },
+        { $unwind: "$client" },
+        {
+          $project: {
+            _id: 1,
+            projectName: "$client.projectName",
+            clientName: "$client.clientName",
+            status: "$client.status",
+            deadline: 1,
+          },
+        },
+      ];
+
+      const result = await projectsCollection.aggregate(aggregation).toArray();
+      res.json(result);
+    } catch (error) {
+      console.error("Error fetching project summaries:", error);
+      res.status(500).json({ message: "Failed to fetch projects summary" });
     }
   });
 
