@@ -200,10 +200,7 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
         const rgx = new RegExp(search.trim(), "i");
         pipeline.push({
           $match: {
-            $or: [
-              { "client.projectName": rgx },
-              { "client.companyName": rgx },
-            ],
+            $or: [{ "client.projectName": rgx }, { "client.companyName": rgx }],
           },
         });
       }
@@ -232,8 +229,6 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
   });
 
   // ====== GET /projects/:id ======
-  // Returns detailed information for a single project by its _id.
-  // Combines fields from the project document and its linked client.
   router.get("/projects/:id", async (req, res) => {
     try {
       const { id } = req.params;
@@ -261,9 +256,11 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
             projectCost: 1,
             stackName: 1,
             totalTasks: 1,
+            completeTask: 1,
             deadline: 1,
             createdAt: 1,
             timeline: 1,
+            issues: 1,
             projectDescription: 1,
             "client.clientName": 1,
             "client.projectName": 1,
@@ -284,10 +281,45 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
         ...projectFields
       } = doc;
 
-      res.json({ clientName, projectName, status, assignedTeam, ...projectFields });
+      res.json({
+        clientName,
+        projectName,
+        status,
+        assignedTeam,
+        ...projectFields,
+      });
     } catch (error) {
       console.error("Error fetching project detail:", error);
       res.status(500).json({ message: "Failed to fetch project detail" });
+    }
+  });
+
+  router.patch("/projects/:id/timeline", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { timeline } = req.body;
+
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid project id" });
+      }
+      if (!Array.isArray(timeline)) {
+        return res.status(400).json({ message: "Timeline must be an array" });
+      }
+
+      const result = await projectsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { timeline } },
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      // return the saved timeline so client can re-sync if needed
+      res.json({ success: true, timeline });
+    } catch (error) {
+      console.error("Error updating timeline:", error);
+      res.status(500).json({ message: "Failed to update timeline" });
     }
   });
 
