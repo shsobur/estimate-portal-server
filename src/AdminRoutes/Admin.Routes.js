@@ -117,6 +117,35 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
     }
   });
 
+  // ====== PATCH /clients/complete ======
+  // body should contain { clientCode }
+  // sets matching client's status to "complete"
+  router.patch("/clients/complete", async (req, res) => {
+    try {
+      const { clientCode } = req.body;
+      console.log(clientCode);
+      if (!clientCode) {
+        return res
+          .status(400)
+          .json({ message: "clientCode is required in request body" });
+      }
+
+      const result = await clientsCollection.updateOne(
+        { clientCode },
+        { $set: { status: "Complete" } },
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+
+      res.json({ message: "Client marked complete", result });
+    } catch (error) {
+      console.error("Error updating client status:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   router.post("/client-by-code", async (req, res) => {
     try {
       const { clientCode } = req.body;
@@ -182,8 +211,8 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
       const { search, status = "All Status" } = req.query;
       const clientCollName = clientsCollection.collectionName || "clients";
 
-      // build aggregation pipeline incrementally for good performance
       const pipeline = [
+        // Lookup client details
         {
           $lookup: {
             from: clientCollName,
@@ -193,32 +222,88 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
           },
         },
         { $unwind: "$client" },
-      ];
 
-      // apply search if provided
-      if (search && search.trim()) {
-        const rgx = new RegExp(search.trim(), "i");
-        pipeline.push({
-          $match: {
-            $or: [{ "client.projectName": rgx }, { "client.companyName": rgx }],
+        // Optional search filter (on client fields)
+        ...(search && search.trim()
+          ? [
+              {
+                $match: {
+                  $or: [
+                    { "client.projectName": new RegExp(search.trim(), "i") },
+                    { "client.companyName": new RegExp(search.trim(), "i") },
+                    { "client.clientName": new RegExp(search.trim(), "i") },
+                  ],
+                },
+              },
+            ]
+          : []),
+
+        // Optional status filter (on client.status)
+        ...(status && status !== "All Status"
+          ? [{ $match: { "client.status": status } }]
+          : []),
+
+        // ---- Progress calculation ----
+        // Ensure timeline exists (default to empty array if missing)
+        {
+          $addFields: {
+            timeline: { $ifNull: ["$timeline", []] },
           },
-        });
-      }
-
-      // apply status filter except when user selects "All Status"
-      if (status && status !== "All Status") {
-        pipeline.push({ $match: { "client.status": status } });
-      }
-
-      pipeline.push({
-        $project: {
-          _id: 1,
-          projectName: "$client.projectName",
-          clientName: "$client.clientName",
-          status: "$client.status",
-          deadline: 1,
         },
-      });
+        // Count total steps
+        {
+          $addFields: {
+            totalSteps: { $size: "$timeline" },
+          },
+        },
+        // Count completed steps (status = "completed")
+        {
+          $addFields: {
+            completedSteps: {
+              $size: {
+                $filter: {
+                  input: "$timeline",
+                  as: "step",
+                  cond: { $eq: ["$$step.status", "completed"] },
+                },
+              },
+            },
+          },
+        },
+        // Calculate progress percentage (avoid division by zero)
+        {
+          $addFields: {
+            progress: {
+              $cond: [
+                { $eq: ["$totalSteps", 0] },
+                0,
+                {
+                  $multiply: [
+                    { $divide: ["$completedSteps", "$totalSteps"] },
+                    100,
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        // ---- End progress calculation ----
+
+        // Final projection – include all fields you need, plus progress
+        {
+          $project: {
+            _id: 1,
+            clientCode: "$client.clientCode",
+            projectName: "$client.projectName",
+            clientName: "$client.clientName",
+            status: "$client.status",
+            deadline: 1,
+            createdAt: 1,
+            progress: 1, // new field
+            // timeline: 0  // optionally exclude raw timeline
+          },
+        },
+      ];
 
       const result = await projectsCollection.aggregate(pipeline).toArray();
       res.json(result);
@@ -266,6 +351,7 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
             "client.projectName": 1,
             "client.status": 1,
             "client.assignedTeam": 1,
+            "client.clientCode": 1,
           },
         },
       ];
@@ -277,7 +363,7 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
 
       // flatten client object
       const {
-        client: { clientName, projectName, status, assignedTeam },
+        client: { clientName, projectName, status, assignedTeam, clientCode },
         ...projectFields
       } = doc;
 
@@ -286,6 +372,7 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
         projectName,
         status,
         assignedTeam,
+        clientCode,
         ...projectFields,
       });
     } catch (error) {
@@ -294,35 +381,88 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
     }
   });
 
-  router.patch("/projects/:id/timeline", async (req, res) => {
+  // router.patch("/projects/:id/timeline", async (req, res) => {
+  //   try {
+  //     const { id } = req.params;
+  //     const { timeline } = req.body;
+
+  //     if (!ObjectId.isValid(id)) {
+  //       return res.status(400).json({ message: "Invalid project id" });
+  //     }
+  //     if (!Array.isArray(timeline)) {
+  //       return res.status(400).json({ message: "Timeline must be an array" });
+  //     }
+
+  //     const result = await projectsCollection.updateOne(
+  //       { _id: new ObjectId(id) },
+  //       { $set: { timeline } },
+  //     );
+
+  //     if (result.matchedCount === 0) {
+  //       return res.status(404).json({ message: "Project not found" });
+  //     }
+
+  //     // return the saved timeline so client can re-sync if needed
+  //     res.json({ success: true, timeline });
+  //   } catch (error) {
+  //     console.error("Error updating timeline:", error);
+  //     res.status(500).json({ message: "Failed to update timeline" });
+  //   }
+  // });
+
+  // PATCH /projects/:id - Update or add fields to a project
+
+  router.patch("/projects/:id", async (req, res) => {
     try {
       const { id } = req.params;
-      const { timeline } = req.body;
+      const updates = req.body;
 
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "Invalid project id" });
-      }
-      if (!Array.isArray(timeline)) {
-        return res.status(400).json({ message: "Timeline must be an array" });
+      // Basic validation
+      if (!id || !Object.keys(updates).length) {
+        return res
+          .status(400)
+          .json({ message: "Project ID and update data are required." });
       }
 
-      const result = await projectsCollection.updateOne(
+      // Optional: restrict which fields can be updated (security)
+      const allowedUpdates = [
+        "projectCost",
+        "stackName",
+        "totalTasks",
+        "completeTask",
+        "deadline",
+        "projectDescription",
+        "timeline",
+        "issues",
+      ];
+      const isValidOperation = Object.keys(updates).every((field) =>
+        allowedUpdates.includes(field),
+      );
+      if (!isValidOperation) {
+        return res.status(400).json({ message: "Invalid updates!" });
+      }
+
+      // Build update object with $set
+      const updateDoc = { $set: updates };
+
+      // Perform the update and return the new document
+      const result = await projectsCollection.findOneAndUpdate(
         { _id: new ObjectId(id) },
-        { $set: { timeline } },
+        updateDoc,
+        { returnDocument: "after" }, // returns the updated document
       );
 
-      if (result.matchedCount === 0) {
-        return res.status(404).json({ message: "Project not found" });
+      if (!result.value) {
+        return res.status(404).json({ message: "Project not found." });
       }
 
-      // return the saved timeline so client can re-sync if needed
-      res.json({ success: true, timeline });
+      res.json(result.value);
     } catch (error) {
-      console.error("Error updating timeline:", error);
-      res.status(500).json({ message: "Failed to update timeline" });
+      console.error("Error updating project:", error);
+      res.status(500).json({ message: "Failed to update project." });
     }
   });
-
+  
   return router;
 };
 
