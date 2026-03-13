@@ -96,6 +96,37 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
     }
   });
 
+  // ====== PATCH /clients/complete ======
+  // ====== PATCH /clients/update-by-code ======
+  // ====== PATCH /clients/complete ======
+  router.patch("/clients/complete", async (req, res) => {
+    try {
+      const { clientCode, status } = req.body;
+      console.log("Updating client:", clientCode, "Status:", status);
+
+      if (!clientCode) {
+        return res.status(400).json({ message: "clientCode is required" });
+      }
+
+      // Use provided status or default to "Complete"
+      const updateStatus = status || "Complete";
+
+      const result = await clientsCollection.updateOne(
+        { clientCode },
+        { $set: { status: updateStatus } },
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ message: "Client not found" });
+      }
+
+      res.json({ message: `Client marked ${updateStatus}`, result });
+    } catch (error) {
+      console.error("Error updating client status:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ====== PATCH /clients/:id ======
   router.patch("/clients/:id", async (req, res) => {
     try {
@@ -113,35 +144,6 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
 
       res.json({ message: "Client updated successfully", result });
     } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // ====== PATCH /clients/complete ======
-  // body should contain { clientCode }
-  // sets matching client's status to "complete"
-  router.patch("/clients/complete", async (req, res) => {
-    try {
-      const { clientCode } = req.body;
-      console.log(clientCode);
-      if (!clientCode) {
-        return res
-          .status(400)
-          .json({ message: "clientCode is required in request body" });
-      }
-
-      const result = await clientsCollection.updateOne(
-        { clientCode },
-        { $set: { status: "Complete" } },
-      );
-
-      if (result.matchedCount === 0) {
-        return res.status(404).json({ message: "Client not found" });
-      }
-
-      res.json({ message: "Client marked complete", result });
-    } catch (error) {
-      console.error("Error updating client status:", error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -193,7 +195,7 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
 
       const result = await projectsCollection.insertOne({
         ...projectData,
-        createdAt: new Date(),
+        start: new Date(),
       });
 
       res.status(201).json({
@@ -298,9 +300,8 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
             clientName: "$client.clientName",
             status: "$client.status",
             deadline: 1,
-            createdAt: 1,
-            progress: 1, // new field
-            // timeline: 0  // optionally exclude raw timeline
+            start: 1,
+            progress: 1,
           },
         },
       ];
@@ -335,14 +336,59 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
           },
         },
         { $unwind: "$client" },
+
+        {
+          $addFields: {
+            timeline: { $ifNull: ["$timeline", []] },
+          },
+        },
+        // Count total steps
+        {
+          $addFields: {
+            totalSteps: { $size: "$timeline" },
+          },
+        },
+        // Count completed steps (status = "completed")
+        {
+          $addFields: {
+            completedSteps: {
+              $size: {
+                $filter: {
+                  input: "$timeline",
+                  as: "step",
+                  cond: { $eq: ["$$step.status", "completed"] },
+                },
+              },
+            },
+          },
+        },
+        // Calculate progress percentage (avoid division by zero)
+        {
+          $addFields: {
+            progress: {
+              $cond: [
+                { $eq: ["$totalSteps", 0] },
+                0,
+                {
+                  $multiply: [
+                    { $divide: ["$completedSteps", "$totalSteps"] },
+                    100,
+                  ],
+                },
+              ],
+            },
+          },
+        },
+
         {
           $project: {
-            _id: 0,
+            _id: 1,
             projectCost: 1,
             stackName: 1,
             totalTasks: 1,
             completeTask: 1,
             deadline: 1,
+            start: 1,
             createdAt: 1,
             timeline: 1,
             issues: 1,
@@ -352,6 +398,7 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
             "client.status": 1,
             "client.assignedTeam": 1,
             "client.clientCode": 1,
+            progress: 1,
           },
         },
       ];
@@ -417,6 +464,11 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
       const { id } = req.params;
       const updates = req.body;
 
+      if (!ObjectId.isValid(id)) {
+        console.log("Invalid ObjectId:", id);
+        return res.status(400).json({ message: "Invalid project id" });
+      }
+
       // Basic validation
       if (!id || !Object.keys(updates).length) {
         return res
@@ -434,11 +486,13 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
         "projectDescription",
         "timeline",
         "issues",
+        "start",
       ];
       const isValidOperation = Object.keys(updates).every((field) =>
         allowedUpdates.includes(field),
       );
       if (!isValidOperation) {
+        console.log("Invalid update fields:", Object.keys(updates));
         return res.status(400).json({ message: "Invalid updates!" });
       }
 
@@ -449,12 +503,8 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
       const result = await projectsCollection.findOneAndUpdate(
         { _id: new ObjectId(id) },
         updateDoc,
-        { returnDocument: "after" }, // returns the updated document
+        { returnDocument: "after" },
       );
-
-      if (!result.value) {
-        return res.status(404).json({ message: "Project not found." });
-      }
 
       res.json(result.value);
     } catch (error) {
@@ -462,7 +512,7 @@ const adminRoutes = (clientsCollection, projectsCollection) => {
       res.status(500).json({ message: "Failed to update project." });
     }
   });
-  
+
   return router;
 };
 
