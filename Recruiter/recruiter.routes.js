@@ -7,7 +7,7 @@ const recruiterRoutes = (
   jobsCollection,
   verifyMessageCollection,
   applicationsCollection,
-  usersCollection
+  usersCollection,
 ) => {
   router.post("/post-job", async (req, res) => {
     try {
@@ -52,6 +52,40 @@ const recruiterRoutes = (
       json
         .status(500)
         .send({ message: "Server error while fetching applications" });
+    }
+  });
+
+  router.patch("/job-applications/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updateData = req.body;
+
+      if (!id || !ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid application ID" });
+      }
+
+      if (!updateData || Object.keys(updateData).length === 0) {
+        return res.status(400).json({ message: "No update data provided" });
+      }
+
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = { $set: updateData };
+      const options = { returnDocument: "after" };
+
+      const result = await applicationsCollection.findOneAndUpdate(
+        query,
+        updateDoc,
+        options,
+      );
+
+      if (!result) {
+        return res.status(404).json({ message: "Application not found" });
+      }
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("Error updating application:", error);
+      res.status(500).json({ message: "Server error", error: error.message });
     }
   });
 
