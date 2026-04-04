@@ -94,7 +94,6 @@ const usersRoutes = (
   router.patch("/update-job-details/:jobId", async (req, res) => {
     const jobId = req.params.jobId;
     const seekerId = req.body;
-    console.log(jobId);
 
     if (!jobId || !seekerId) {
       return res.status(400).send({ message: "Missing jobId or seekerId" });

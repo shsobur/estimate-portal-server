@@ -45,11 +45,13 @@ const recruiterRoutes = (
 
   router.get("/job-applications", async (req, res) => {
     try {
-      const result = await applicationsCollection.find().toArray();
+      const result = await applicationsCollection
+        .find({ isAccept: "Pending" })
+        .toArray();
       res.status(200).send(result);
     } catch (error) {
       console.error("Error fetching job applications:", error);
-      json
+      res
         .status(500)
         .send({ message: "Server error while fetching applications" });
     }
@@ -85,6 +87,69 @@ const recruiterRoutes = (
       res.status(200).json(result);
     } catch (error) {
       console.error("Error updating application:", error);
+      res.status(500).json({ message: "Server error", error: error.message });
+    }
+  });
+
+  router.put("/job-applications/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      console.log("Line 95:", id);
+
+      if (!id || !ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid application ID" });
+      }
+
+      const existingApp = await applicationsCollection.findOne({
+        _id: new ObjectId(id),
+      });
+
+      if (!existingApp) {
+        return res.status(404).json({ message: "Application not found" });
+      }
+
+      // Keep only these fields + set isAccept to false
+      const replacedDoc = {
+        applyTime: existingApp.applyTime,
+        jobPostId: existingApp.jobPostId,
+        seekerId: existingApp.seekerId,
+        companyEmail: existingApp.companyEmail,
+        applicantEmail: existingApp.applicantEmail,
+        positionName: existingApp.positionName,
+        isAccept: false,
+      };
+
+      const result = await applicationsCollection.findOneAndReplace(
+        { _id: new ObjectId(id) },
+        replacedDoc,
+        { returnDocument: "after" },
+      );
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("Error rejecting application:", error);
+      res.status(500).json({ message: "Server error", error: error.message });
+    }
+  });
+
+  router.delete("/job-applications/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (!id || !ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid application ID" });
+      }
+
+      const query = { _id: new ObjectId(id) };
+      const result = await applicationsCollection.findOneAndDelete(query);
+
+      if (!result) {
+        return res.status(404).json({ message: "Application not found" });
+      }
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("Error deleting application:", error);
       res.status(500).json({ message: "Server error", error: error.message });
     }
   });
